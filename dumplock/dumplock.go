@@ -3,37 +3,17 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/base64"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"math/rand"
-	"net"
 	"net/http"
-	"net/http/httptest"
 	"net/http/httputil"
 	"runtime/pprof"
 	"strconv"
 	"sync"
 	"time"
 )
-
-type loggingRoundTripper struct {
-	sub http.RoundTripper
-}
-
-func (lrt *loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	httputil.DumpRequestOut(req, true)
-
-	return lrt.sub.RoundTrip(req)
-}
-
-func NewLoggingRoundTripper(sub http.RoundTripper) http.RoundTripper {
-	return &loggingRoundTripper{
-		sub: sub,
-	}
-}
 
 // TestDumpRoundTripRace calls the various Dump functions at the obvious
 // locations in implementations of http.RoundTripper and http.Handler.
@@ -56,39 +36,6 @@ func main() {
 }
 
 func testDumpRoundTripRace(scheme string, dumpBody bool) {
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(time.Millisecond * time.Duration(rand.Intn(3000)))
-		ioutil.ReadAll(r.Body)
-	})
-
-	var srv *httptest.Server
-	switch scheme {
-	case "http":
-		srv = httptest.NewServer(handler)
-	case "https":
-		srv = httptest.NewTLSServer(handler)
-	default:
-		log.Fatalf("unexpected scheme %s", scheme)
-	}
-	defer srv.Close()
-
-	c := http.Client{
-		// Transport based on http.DefaultTransport with keep alives
-		// disabled for cameras that only support one request per connection
-		Transport: NewLoggingRoundTripper(&http.Transport{
-			Proxy: http.ProxyFromEnvironment,
-			DialContext: (&net.Dialer{
-				Timeout:   time.Second,
-				DualStack: true,
-			}).DialContext,
-			DisableKeepAlives:     true,
-			TLSHandshakeTimeout:   1 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
-			TLSClientConfig:       &tls.Config{InsecureSkipVerify: true},
-		}),
-		Timeout: 2 * time.Second,
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	if rand.Intn(2) > 0 {
@@ -104,20 +51,14 @@ func testDumpRoundTripRace(scheme string, dumpBody bool) {
 	data, err := randomBase64EncodedString(10000)
 	requireNoError(err)
 	buffer := bytes.NewBuffer([]byte(data))
-	req, err := http.NewRequest("POST", srv.URL, buffer)
+	req, err := http.NewRequest("POST", "http://abc.com/123", buffer)
 	requireNoError(err)
 
 	req = req.WithContext(ctx)
 	req.Header.Set("Content-Type", "application/soap+xml")
 	req.Header.Set("Charset", "utf-8")
 
-	fmt.Printf("Do request\n")
-	resp, err := c.Do(req)
-	fmt.Printf("Responded with %v\n", err)
-	if err == nil {
-		resp.Body.Close()
-	}
-	//fmt.Printf("Log: %s\n", log.String())
+	httputil.DumpRequestOut(req, true)
 }
 
 func requireNoError(err error) {
